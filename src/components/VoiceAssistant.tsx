@@ -7,8 +7,6 @@ import { WAKE_WORD, WAKE_WORD_VARIANTS, SAMPLING_RATE_IN, SAMPLING_RATE_OUT, GEM
 import { encode, decode, decodeAudioData, downsampleTo16k } from '@/lib/audioUtils';
 import { knowledgeBase } from '@/lib/knowledge_base';
 
-// NOTE: The entire component is being replaced for clarity, but the key changes
-// are the addition of `isBooted` state and the new `useEffect` hook for wake word detection.
 
 const VoiceAssistant: React.FC = () => {
     const [appState, setAppState] = useState<AppState>(AppState.IDLE);
@@ -19,7 +17,6 @@ const VoiceAssistant: React.FC = () => {
     const [isAccepted, setIsAccepted] = useState(false);
     const [isSupportModalOpen, setIsSupportModalOpen] = useState(false);
 
-    // --- NEW STATE TO MANAGE LIFECYCLE ---
     const [isBooted, setIsBooted] = useState(false);
 
     // Refs for audio processing
@@ -39,6 +36,7 @@ const VoiceAssistant: React.FC = () => {
 
     // Wake word detector
     const wakeWordRecognitionRef = useRef<any>(null);
+    const processingRef = useRef(false);
 
     const stopAllAudio = useCallback(() => {
         sourcesRef.current.forEach(source => {
@@ -130,9 +128,10 @@ const VoiceAssistant: React.FC = () => {
     };
 
     const startAssistantSession = useCallback(async () => {
-        if (appState !== AppState.LISTENING_WAKE_WORD) return; // Prevent re-triggering
+        if (processingRef.current || appState !== AppState.LISTENING_WAKE_WORD) return; // Prevent re-triggering
 
         try {
+            processingRef.current = true;
             setAppState(AppState.ACTIVE_LISTENING);
             setWakeWordBuffer('');
 
@@ -140,6 +139,7 @@ const VoiceAssistant: React.FC = () => {
             if (!apiKey) {
                 setError("API Key missing.");
                 setAppState(AppState.ERROR);
+                processingRef.current = false;
                 return;
             }
 
@@ -188,13 +188,29 @@ Knowledge base: ${JSON.stringify(knowledgeBase)}`,
                     },
                     onmessage: async (message: LiveServerMessage) => {
                         if (message.serverContent?.inputTranscription) {
-                            // Accumulate incremental transcription chunks
-                            currentInputTranscriptionRef.current += message.serverContent.inputTranscription.text || '';
+                            const newText = message.serverContent.inputTranscription.text || '';
+                            // Smart append - only add if it's truly new content
+                            if (newText && !currentInputTranscriptionRef.current.endsWith(newText)) {
+                                // Check if new text is an extension of current
+                                if (newText.startsWith(currentInputTranscriptionRef.current)) {
+                                    currentInputTranscriptionRef.current = newText;
+                                } else {
+                                    currentInputTranscriptionRef.current += newText;
+                                }
+                            }
                             updateTranscripts('user', currentInputTranscriptionRef.current, false);
                         }
                         if (message.serverContent?.outputTranscription) {
-                            // Accumulate incremental transcription chunks
-                            currentOutputTranscriptionRef.current += message.serverContent.outputTranscription.text || '';
+                            const newText = message.serverContent.outputTranscription.text || '';
+                            // Smart append - only add if it's truly new content
+                            if (newText && !currentOutputTranscriptionRef.current.endsWith(newText)) {
+                                // Check if new text is an extension of current
+                                if (newText.startsWith(currentOutputTranscriptionRef.current)) {
+                                    currentOutputTranscriptionRef.current = newText;
+                                } else {
+                                    currentOutputTranscriptionRef.current += newText;
+                                }
+                            }
                             updateTranscripts('assistant', currentOutputTranscriptionRef.current, false);
                             setAppState(AppState.SPEAKING);
                         }
@@ -225,7 +241,11 @@ Knowledge base: ${JSON.stringify(knowledgeBase)}`,
                         setError('Connection failed. Re-initializing...');
                         setAppState(AppState.ERROR);
                     },
-                    onclose: () => setAppState(AppState.LISTENING_WAKE_WORD)
+                    onclose: () => {
+                        console.log("Session closed");
+                        processingRef.current = false;
+                        setAppState(AppState.LISTENING_WAKE_WORD);
+                    }
                 }
             });
             sessionRef.current = await sessionPromise;
@@ -239,6 +259,8 @@ Knowledge base: ${JSON.stringify(knowledgeBase)}`,
     // --- REFACTORED WAKE WORD LOGIC WITH CLEANUP ---
     useEffect(() => {
         if (!isBooted) return;
+        // Don't start wake word detection if we are already in an active session
+        if (appState === AppState.ACTIVE_LISTENING || appState === AppState.SPEAKING) return;
 
         let recognition: any;
 
