@@ -9,7 +9,7 @@
 
 import './env.js';
 import {
-    WorkerOptions,
+    ServerOptions,
     cli,
     defineAgent,
     JobContext,
@@ -101,6 +101,6 @@ export default defineAgent({
 });
 
 // CLI entry point
-cli.runApp(new WorkerOptions({
+cli.runApp(new ServerOptions({
     agent: import.meta.filename,
 }));
